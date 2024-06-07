@@ -5,6 +5,7 @@ import json
 import requests
 from dotenv import dotenv_values
 from urllib.parse import urljoin
+import csv
 
 def parse_args():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -40,61 +41,107 @@ def main(args):
 
     # Initialize AIR session and store authorization token
     session = requests.post(urljoin(args.URL, 'login'), json = auth_info).json()
+    #print(session)
 
     jwt = session['token']['jwt']
     header = {'Authorization': 'Bearer ' + jwt}
 
-    # Search for study by accession number 
-    study = requests.post(urljoin(args.URL, 'secure/search/query-data-source'), 
-        headers = header,
-        json = {'name': '',
-                'mrn': '',
-                'accNum': args.acc,
-                'dateRange': {'start':'','end':'','label':''},
-                'modality': '',
-                'sourceId': 1
-        }).json()['exams'][0]
+    # Search for study by accession number
+    with open("C:/Users/Fayyaz/Documents/GitHub/air_download/petcts.csv", newline='') as csvfile:
+        spamreader = csv.reader(csvfile, delimiter=' ', quotechar='|')
+        for row in spamreader:
+            while True:
+                try:
+                    session = requests.post(urljoin(args.URL, 'login'), json = auth_info).json()
+                    break
+                except Exception as e:
+                    print("line 58")
+                    print(e)
+            jwt = session['token']['jwt']
+            header = {'Authorization': 'Bearer ' + jwt}
+            print(row[0])
+            try:
+                study = requests.post(urljoin(args.URL, 'secure/search/query-data-source'), 
+                    headers = header,
+                    json = {'name': '',
+                            'mrn': '',
+                            'accNum': row[0],
+                            'dateRange': {'start':'','end':'','label':''},
+                            'modality': '',
+                            'sourceId': 1,
+                            'projectId': 146
+                    }).json()['exams'][0]
+            except Exception as e:
+                print(row[0] + 'failed')
+                print(e)
+                continue
 
-    # Make a list of all included series
-    series = requests.post(urljoin(args.URL, 'secure/search/series'),
-        headers = header,
-        json = study).json()
+            # Make a list of all included series
+            series = requests.post(urljoin(args.URL, 'secure/search/series'),
+                headers = header,
+                json = study).json()
+            output_list = []
+            for seri in series:
+                if seri['description'] is None:
+                    continue
+                if "PET WB AC" in seri['description'] in seri['description'] or "Head to Thighs MAC" in seri['description'] or ("WB_CTAC" in seri['description'] and "Fused" not in seri['description'] and "MIP" not in seri['description']):
+                    print(seri['description'] + "found")
+                    print(seri['seriesUid'])
+                    output_list.append(seri)
 
-    def has_started():
-        check = requests.post(urljoin(args.URL, 'secure/search/download/check'),
-            headers = header,
-            json = {'downloadId': download_info['downloadId'],
-                'projectId': -1
-            }).json()
-        return check['status'] in ['started', 'completed']
+                if "3d" in seri['description'].lower():
+                    print(seri['description'] + "found")
+                    print(seri['seriesUid'])
+                    output_list.append(seri)
 
-    # Prepare download job
-    download_info = requests.post(urljoin(args.URL, 'secure/search/download/start'),
-        headers = header,
-        json = {'decompress': False,
-                'name': 'Download.zip',
-                'profile': args.profile,
-                'projectId': -1,
-                'series': series,
-                'study': study 
-        }).json()
+                if "CTAC EFOV" in seri['description'] or "EFOV" in seri['description'] or ("CTAC WB" in seri['description'] and "Br38" in seri['description']):
+                    print(seri['description'] + "found")
+                    print(seri['seriesUid'])
+                    output_list.append(seri)
 
-    # Ensure that archive is ready for download
-    while not has_started():
-        time.sleep(0.1)
 
-    # Download archive
-    download_stream = requests.post(urljoin(args.URL, 'secure/search/download/zip'),
-        headers = {'Upgrade-Insecure-Requests': '1'},
-        data = {'params': json.dumps({'downloadId': download_info['downloadId'], 'projectId': -1, 'name': 'Download.zip'}),
-                'jwt': jwt
-        }, stream=True)
+            def has_started():
+                check = requests.post(urljoin(args.URL, 'secure/search/download/check'),
+                    headers = header,
+                    json = {'downloadId': download_info['downloadId'],
+                        'projectId': 146
+                    }).json()
+                return check['status'] in ['started', 'completed']
 
-    # Save archive to disk
-    with open(args.output, 'wb') as fd:
-        for chunk in download_stream.iter_content(chunk_size=8192):
-            if chunk:
-                _ = fd.write(chunk)
+            # Prepare download job
+            download_info = requests.post(urljoin(args.URL, 'secure/search/download/start'),
+                headers = header,
+                json = {'decompress': False,
+                        'name': 'Download.zip',
+                        'profile': args.profile,
+                        'projectId': 146,
+                        'series': output_list,
+                        'study': study 
+                }).json()
+            #print(download_info)
+
+            # Ensure that archive is ready for download
+            while not has_started():
+                time.sleep(0.1)
+
+            # Download archive
+            download_stream = requests.post(urljoin(args.URL, 'secure/search/download/zip'),
+                headers = {'Upgrade-Insecure-Requests': '1'},
+                data = {'params': json.dumps({'downloadId': download_info['downloadId'], 'projectId': 146, 'name': 'Download.zip'}),
+                        'jwt': jwt
+                }, stream=True)
+
+            # Save archive to disk
+            with open('//researchfiles.radiology.ucsf.edu/fahamed/Downloads/{acc}.zip'.format(acc=row[0]), 'wb') as fd:
+                while True:
+                    try:
+                        for chunk in download_stream.iter_content(chunk_size=8192):
+                            if chunk:
+                                _ = fd.write(chunk)
+                        break
+                    except:
+                        print("Lost connection")
+                        time.sleep(0.1)
 
 def cli():
     main(parse_args())
